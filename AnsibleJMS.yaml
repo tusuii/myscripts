@@ -1,0 +1,72 @@
+# Ansible Setup Java Maven Application Build Server
+
+---
+- name: Setup Java Maven Build Server
+  hosts: all
+  become: true
+  vars:
+    java_package: openjdk-11-jdk
+    maven_version: 3.8.8
+    maven_install_dir: /opt
+    maven_symlink: /opt/maven
+    app_git_repo: "https://github.com/spring-projects/spring-petclinic.git"
+    app_dest: "/opt/java-app"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install Java
+      apt:
+        name: "{{ java_package }}"
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Install required tools
+      apt:
+        name:
+          - wget
+          - tar
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Download Maven
+      get_url:
+        url: "https://downloads.apache.org/maven/maven-3/{{ maven_version }}/binaries/apache-maven-{{ maven_version }}-bin.tar.gz"
+        dest: "/tmp/maven.tar.gz"
+
+    - name: Extract Maven
+      unarchive:
+        src: "/tmp/maven.tar.gz"
+        dest: "{{ maven_install_dir }}"
+        remote_src: yes
+
+    - name: Create Maven symlink
+      file:
+        src: "{{ maven_install_dir }}/apache-maven-{{ maven_version }}"
+        dest: "{{ maven_symlink }}"
+        state: link
+
+    - name: Set Maven environment variables
+      copy:
+        dest: /etc/profile.d/maven.sh
+        content: |
+          export M2_HOME={{ maven_symlink }}
+          export MAVEN_HOME={{ maven_symlink }}
+          export PATH=${M2_HOME}/bin:${PATH}
+        mode: '0755'
+
+    - name: Clone Java Maven Application
+      git:
+        repo: "{{ app_git_repo }}"
+        dest: "{{ app_dest }}"
+        version: main
+
+    - name: Build Maven project
+      shell: |
+        . /etc/profile.d/maven.sh
+        mvn clean install
+      args:
+        chdir: "{{ app_dest }}"
