@@ -5,11 +5,11 @@
   hosts: all
   become: true
   vars:
-    java_package: openjdk-11-jdk
+    java_package: openjdk-17-jdk
     maven_version: 3.8.8
     maven_install_dir: /opt
     maven_symlink: /opt/maven
-    app_git_repo: "https://github.com/spring-projects/spring-petclinic.git"
+    app_git_repo: "https://github.com/tusuii/cicd-proj.git"
     app_dest: "/opt/java-app"
 
   tasks:
@@ -18,7 +18,7 @@
         update_cache: yes
       when: ansible_os_family == "Debian"
 
-    - name: Install Java
+    - name: Install Java 17
       apt:
         name: "{{ java_package }}"
         state: present
@@ -28,6 +28,7 @@
       apt:
         name:
           - wget
+          - git
           - tar
         state: present
       when: ansible_os_family == "Debian"
@@ -55,7 +56,7 @@
         content: |
           export M2_HOME={{ maven_symlink }}
           export MAVEN_HOME={{ maven_symlink }}
-          export PATH=${M2_HOME}/bin:${PATH}
+          export PATH={{ maven_symlink }}/bin:$PATH
         mode: '0755'
 
     - name: Clone Java Maven Application
@@ -65,8 +66,10 @@
         version: main
 
     - name: Build Maven project
-      shell: |
-        . /etc/profile.d/maven.sh
-        mvn clean install
+      shell: mvn clean install
       args:
         chdir: "{{ app_dest }}"
+      environment:
+        MAVEN_HOME: "{{ maven_symlink }}"
+        M2_HOME: "{{ maven_symlink }}"
+        PATH: "{{ maven_symlink }}/bin:{{ ansible_env.PATH }}"
