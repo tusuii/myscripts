@@ -1,0 +1,26 @@
+---
+-
+  name: install nginx
+  hosts: prod
+  become: yes
+
+  tasks:
+    - name: install nginx
+      apt:
+        name: nginx
+        state: latest
+
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+
+    - name: service start nginx
+      service:
+        name: nginx
+        state: started
+
+    - name: copy index html file to /var/www/html
+      copy:
+        src: index.html
+        dest: /var/www/html/
+
