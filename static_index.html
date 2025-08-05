@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>System Info Dashboard</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: "Fira Code", monospace;
+      background: #121212;
+      color: #00FF41;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .terminal {
+      background: #1e1e1e;
+      width: 80%;
+      margin-top: 50px;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 0 20px #00ff4190;
+    }
+
+    h1 {
+      text-align: center;
+      color: #00FF41;
+      text-shadow: 0 0 10px #00FF41;
+    }
+
+    .output {
+      font-size: 1.1em;
+      line-height: 1.6;
+      white-space: pre-line;
+    }
+
+    .command {
+      color: #FF00FF;
+    }
+
+    .label {
+      color: #00FFFF;
+    }
+
+    .footer {
+      margin-top: 40px;
+      color: #999;
+      font-size: 0.8em;
+    }
+  </style>
+</head>
+<body>
+  <h1>🖥️ System Information</h1>
+  <div class="terminal">
+    <div class="output" id="sysinfo">
+      Loading system info...
+    </div>
+  </div>
+  <div class="footer">HTML + CSS + JS (simulated OS commands)</div>
+
+  <script>
+    // Simulate OS command output
+    function fakeSystemInfo() {
+      const uptime = (Math.random() * 48 + 1).toFixed(2); // 1–49 hrs
+      const hostname = window.location.hostname || "localhost";
+      const platform = navigator.platform;
+      const userAgent = navigator.userAgent;
+
+      const output = `
+$ <span class="command">uname -a</span>
+<span class="label">Linux</span> simulated-machine 5.15.0 x86_64 GNU/Linux
+
+$ <span class="command">uptime</span>
+<span class="label">${uptime} hours</span> up, 1 user, load average: 0.12, 0.15, 0.11
+
+$ <span class="command">hostname</span>
+<span class="label">${hostname}</span>
+
+$ <span class="command">platform</span>
+<span class="label">${platform}</span>
+
+$ <span class="command">user-agent</span>
+<span class="label">${userAgent}</span>
+
+$ <span class="command">date</span>
+<span class="label">${new Date().toString()}</span>
+      `;
+      document.getElementById("sysinfo").innerHTML = output;
+    }
+
+    // Run on load
+    fakeSystemInfo();
+  </script>
+</body>
+</html>
