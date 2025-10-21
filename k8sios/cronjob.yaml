@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nginx-cronjob
+  namespace: nginx
+spec:
+  schedule: "* * * * *"  # Runs every minute
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: cron-task
+        spec:
+          containers:
+          - name: cron-container
+            image: busybox:latest
+            command: ["sh", "-c", "echo Hello from the CronJob! && sleep 10"]
+            ports:
+            - containerPort: 80
+            volumeMounts:
+            - name: cron-volume
+              mountPath: /data
+          volumes:
+          - name: cron-volume
+            emptyDir: {}   # Temporary volume for each job run
+          restartPolicy: OnFailure

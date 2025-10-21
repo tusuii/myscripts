@@ -1,0 +1,21 @@
+kind: Job
+apiVersion: batch/v1
+metadata:
+  name: nginx-job
+  namespace: nginx
+spec:
+  template:
+    metadata:
+      labels:
+        app: batch-task
+    spec:
+      containers:
+      - name: batch-container
+        image: busybox:latest
+        command: ["sh", "-c", "echo Hello, Kubernetes! && sleep 10"]  
+        ports:
+        - containerPort: 80
+      restartPolicy: Never
+  backoffLimit: 4
+  completions: 1
+  parallelism: 1

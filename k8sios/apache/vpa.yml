@@ -1,0 +1,45 @@
+kind: VerticalPodAutoscaler
+apiVersion: autoscaling.k8s.io/v1
+metadata:
+  name: apache-vpa
+  namespace: apache
+spec:
+  targetRef:  
+    apiVersion: "apps/v1"
+    kind:       Deployment
+    name:       apache-deployment
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: "apache"
+      minAllowed:
+        cpu: "100m"
+        memory: "128Mi"
+      maxAllowed:
+        cpu: "500m"
+        memory: "512Mi"
+      controlledResources: ["cpu", "memory"]
+      mode: "Auto"
+      initialRequests:
+        cpu: "150m"
+        memory: "192Mi"
+      stabilizationWindowSeconds: 300
+      scalingMode: "Auto"
+      tolerance: 0.1
+      controlledValues: "RequestsAndLimits"
+      priority: 10
+    - containerName: "*"
+      minAllowed:
+        cpu: "50m"
+        memory: "64Mi"
+      maxAllowed:
+        cpu: "300m"
+        memory: "256Mi"
+      controlledResources: ["cpu", "memory"]
+      mode: "Auto"
+      stabilizationWindowSeconds: 300
+      scalingMode: "Auto"
+      tolerance: 0.2
+      controlledValues: "RequestsAndLimits"
+      priority: 5

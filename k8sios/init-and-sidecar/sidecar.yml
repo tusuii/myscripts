@@ -1,0 +1,18 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  name: sidecar
+spec:
+  containers: #main application container definition
+  - name: main-app
+    image: busybox
+    command: ['sh', '-c', 'touch /var/log/sidecar.log && tail -f /var/log/sidecar.log'] #display the logs from sidecar
+  - name: sidecar-container
+    image: busybox:latest
+    command: ['sh', '-c', 'while true; do echo "Sidecar container is running..." >> /var/log/sidecar.log; sleep 10; done']
+    volumeMounts:
+    - name: sidecar-logs
+      mountPath: /var/log
+  volumes:
+  - name: sidecar-logs
+    emptyDir: {}

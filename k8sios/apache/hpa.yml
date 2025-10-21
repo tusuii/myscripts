@@ -1,0 +1,30 @@
+kind: HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+metadata:
+  name: apache-hpa
+  namespace: apache
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: apache-deployment
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 60
+
+# stress test script
+# k run -it load-generator --image=busybox -n apache -- /bin/sh
+# while true; do ab -n 10000 -c 100 http://apache-service.apache.svc.cluster.local/; done
+# while true; do wget -q -O- http://apache-service.apache.svc.cluster.local ; done
