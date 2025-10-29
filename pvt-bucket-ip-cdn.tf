@@ -95,3 +95,22 @@ output "cdn_url" {
 output "bucket_name" {
   value = google_storage_bucket.private_bucket.name
 }
+
+
+
+
+
+
+
+#
+#
+#
+#
+#
+#
+#
+#
+#Now you only need these variables in terraform.tfvars:
+#project_id = "your-gcp-project-id"
+#bucket_name = "your-unique-bucket-name"
+#region = "us-central1"
