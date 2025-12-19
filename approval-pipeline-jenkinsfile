@@ -1,0 +1,228 @@
+pipeline {
+    agent any
+    
+    environment {
+        DOCKER_IMAGE = 'node:18-alpine'
+        CONTAINER_NAME = 'node-microservice'
+        PORT = '3000'
+    }
+    
+    stages {
+        stage('Prepare Environment') {
+            steps {
+                script {
+                    echo 'Checking Docker availability...'
+                    sh 'docker --version'
+                    
+                    echo 'Cleaning up existing containers...'
+                    sh '''
+                        docker stop ${CONTAINER_NAME} 2>/dev/null || true
+                        docker rm ${CONTAINER_NAME} 2>/dev/null || true
+                        docker system prune -f || true
+                    '''
+                }
+            }
+        }
+        
+        stage('Pull Docker Image') {
+            steps {
+                script {
+                    try {
+                        echo "Pulling Docker image: ${DOCKER_IMAGE}"
+                        sh "docker pull ${DOCKER_IMAGE}"
+                        sh "docker images ${DOCKER_IMAGE}"
+                        
+                    } catch (Exception e) {
+                        echo "Failed to pull image: ${e.getMessage()}"
+                        error('Docker image pull failed')
+                    }
+                }
+            }
+        }
+        
+        stage('Developer Approval') {
+            steps {
+                script {
+                    try {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            def approval = input(
+                                message: 'Developer Approval Required',
+                                ok: 'Approve',
+                                submitterParameter: 'APPROVER',
+                                parameters: [
+                                    booleanParam(
+                                        defaultValue: false,
+                                        description: 'Check to approve deployment',
+                                        name: 'APPROVE_DEPLOYMENT'
+                                    )
+                                ]
+                            )
+                            
+                            if (!approval.APPROVE_DEPLOYMENT) {
+                                error('Developer did not approve deployment')
+                            }
+                            
+                            env.DEVELOPER_APPROVER = approval.APPROVER ?: 'developer'
+                            echo "Developer approved: ${env.DEVELOPER_APPROVER}"
+                        }
+                    } catch (Exception e) {
+                        echo "Developer approval failed: ${e.getMessage()}"
+                        error('Developer approval required')
+                    }
+                }
+            }
+        }
+        
+        stage('Manager Approval') {
+            steps {
+                script {
+                    try {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            def approval = input(
+                                message: 'Manager Final Approval Required',
+                                ok: 'Deploy Now',
+                                submitterParameter: 'APPROVER',
+                                parameters: [
+                                    booleanParam(
+                                        defaultValue: false,
+                                        description: 'Final approval to deploy to production',
+                                        name: 'FINAL_APPROVAL'
+                                    )
+                                ]
+                            )
+                            
+                            if (!approval.FINAL_APPROVAL) {
+                                error('Manager did not provide final approval')
+                            }
+                            
+                            env.MANAGER_APPROVER = approval.APPROVER ?: 'manager'
+                            echo "Manager approved: ${env.MANAGER_APPROVER}"
+                        }
+                    } catch (Exception e) {
+                        echo "Manager approval failed: ${e.getMessage()}"
+                        error('Manager approval required')
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy Microservice') {
+            steps {
+                script {
+                    try {
+                        echo 'Starting deployment...'
+                        
+                        sh '''
+                            if docker ps -a --format "table {{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+                                echo "Stopping existing container..."
+                                docker stop ${CONTAINER_NAME} || true
+                                docker rm ${CONTAINER_NAME} || true
+                            fi
+                        '''
+                        
+                        sh '''
+                            docker run -d \
+                                --name ${CONTAINER_NAME} \
+                                -p ${PORT}:3000 \
+                                --restart unless-stopped \
+                                ${DOCKER_IMAGE} \
+                                sh -c "echo 'const express = require(\"express\"); const app = express(); app.get(\"/\", (req, res) => res.json({message: \"Hello from Node.js!\", timestamp: new Date()})); app.get(\"/health\", (req, res) => res.json({status: \"healthy\", timestamp: new Date()})); app.listen(3000, () => console.log(\"Server running on port 3000\"));' > app.js && npm init -y && npm install express && node app.js"
+                        '''
+                        
+                        echo 'Waiting for container to start...'
+                        sleep 10
+                        
+                        sh '''
+                            echo "Verifying deployment..."
+                            docker ps | grep ${CONTAINER_NAME}
+                            echo "Container logs:"
+                            docker logs ${CONTAINER_NAME} --tail 10
+                        '''
+                        
+                        echo 'Deployment completed successfully!'
+                        
+                    } catch (Exception e) {
+                        echo "Deployment failed: ${e.getMessage()}"
+                        
+                        sh '''
+                            echo "Rolling back deployment..."
+                            docker stop ${CONTAINER_NAME} 2>/dev/null || true
+                            docker rm ${CONTAINER_NAME} 2>/dev/null || true
+                        '''
+                        
+                        error('Deployment failed and rolled back')
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                try {
+                    sh 'docker image prune -f || true'
+                } catch (Exception e) {
+                    echo "Cleanup failed: ${e.getMessage()}"
+                }
+            }
+        }
+        
+        success {
+            script {
+                def message = """
+Deployment Successful! 🎉
+
+Job: ${env.JOB_NAME}
+Build: ${env.BUILD_NUMBER}
+Developer Approver: ${env.DEVELOPER_APPROVER ?: 'N/A'}
+Manager Approver: ${env.MANAGER_APPROVER ?: 'N/A'}
+
+Container: ${env.CONTAINER_NAME}
+Image: ${env.DOCKER_IMAGE}
+Port: ${env.PORT}
+
+Build URL: ${env.BUILD_URL}
+"""
+                
+                echo message
+                
+                try {
+                    emailext (
+                        subject: "✅ Deployment Success: ${env.JOB_NAME}",
+                        body: message,
+                        to: "devops@company.com"
+                    )
+                } catch (Exception e) {
+                    echo "Email notification failed: ${e.getMessage()}"
+                }
+            }
+        }
+        
+        failure {
+            script {
+                def message = """
+Deployment Failed! ❌
+
+Job: ${env.JOB_NAME}
+Build: ${env.BUILD_NUMBER}
+
+Please check the build logs for details.
+Build URL: ${env.BUILD_URL}
+"""
+                
+                echo message
+                
+                try {
+                    emailext (
+                        subject: "❌ Deployment Failed: ${env.JOB_NAME}",
+                        body: message,
+                        to: "devops@company.com"
+                    )
+                } catch (Exception e) {
+                    echo "Email notification failed: ${e.getMessage()}"
+                }
+            }
+        }
+    }
+}
