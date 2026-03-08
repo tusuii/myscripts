@@ -1,0 +1,543 @@
+SERVICE_NAME         = "my-node-service"
+NODE_TOOL_NAME       = "NodeJS-20"
+GIT_REPO_URL         = "https://gitea.internal.io/org/my-node-service.git"
+GIT_CREDENTIALS_ID   = "gitea-credentials"
+NPM_TEST_CMD         = "npm run test:ci"
+SONAR_SERVER_NAME    = "SonarQube"
+SONAR_PROJECT_KEY    = "my-node-service"
+SONAR_PROJECT_NAME   = "My Node Service"
+SONAR_TOKEN_ID       = "sonar-token"
+SONAR_HOST_URL       = "http://192.168.108.x:9000"
+OWASP_TOOL_NAME      = "OWASP-Dependency-Check"
+OWASP_FAIL_CVSS      = "7"
+HARBOR_REGISTRY      = "192.168.108.200:80"
+HARBOR_PROJECT       = "microservices"
+HARBOR_CREDS_ID      = "harbor-credentials"
+K8S_KUBECONFIG_ID    = "k8s-kubeconfig"
+K8S_NAMESPACE        = "microservices"
+K8S_CONTAINER_NAME   = "my-node-service"
+K8S_ROLLOUT_TIMEOUT  = "300"
+APPROVERS            = "tester1,manager1,devops-lead"
+APPROVAL_TIMEOUT_MIN = 60
+EMAIL_RECIPIENTS     = "devops@company.io,dev-team@company.io"
+EMAIL_FROM           = "Jenkins CI/CD"
+
+def branchEnvMap = [
+    "main"   : "production",
+    "staging": "staging",
+    "develop": "development"
+]
+
+pipeline {
+
+    agent any
+
+    tools {
+        nodejs "NodeJS-20"
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timestamps()
+        timeout(time: 90, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        ansiColor('xterm')
+    }
+
+    triggers {
+        pollSCM('H/5 * * * *')
+    }
+
+    environment {
+        SONAR_REPORT_DIR = "sonar-reports"
+        OWASP_REPORT_DIR = "owasp-reports"
+    }
+
+    stages {
+
+        stage('Code Checkout') {
+            steps {
+                script {
+                    echo "╔══════════════════════════════════╗"
+                    echo "║   STAGE 1 — Code Checkout        ║"
+                    echo "╚══════════════════════════════════╝"
+
+                    checkout([
+                        $class           : 'GitSCM',
+                        branches         : [[name: "*/${env.BRANCH_NAME}"]],
+                        userRemoteConfigs: [[
+                            url          : GIT_REPO_URL,
+                            credentialsId: GIT_CREDENTIALS_ID
+                        ]],
+                        extensions       : [[$class: 'CleanBeforeCheckout']]
+                    ])
+
+                    env.GIT_COMMIT_FULL   = sh(script: 'git rev-parse HEAD',                          returnStdout: true).trim()
+                    env.GIT_COMMIT_SHORT  = sh(script: 'git rev-parse --short=8 HEAD',                returnStdout: true).trim()
+                    env.GIT_BRANCH_NAME   = sh(script: 'git rev-parse --abbrev-ref HEAD',             returnStdout: true).trim()
+                    env.GIT_AUTHOR_NAME   = sh(script: 'git log -1 --pretty=format:"%an"',            returnStdout: true).trim()
+                    env.GIT_AUTHOR_EMAIL  = sh(script: 'git log -1 --pretty=format:"%ae"',            returnStdout: true).trim()
+                    env.GIT_COMMIT_MSG    = sh(script: 'git log -1 --pretty=format:"%s"',             returnStdout: true).trim()
+                    env.GIT_COMMIT_DATE   = sh(script: 'git log -1 --pretty=format:"%cd" --date=iso', returnStdout: true).trim()
+                    env.GIT_TAG           = sh(script: 'git describe --tags --always --dirty',        returnStdout: true).trim()
+                    env.GIT_TOTAL_COMMITS = sh(script: 'git rev-list --count HEAD',                   returnStdout: true).trim()
+
+                    env.IMAGE_TAG     = env.GIT_COMMIT_SHORT
+                    env.DEPLOY_ENV    = branchEnvMap.get(env.GIT_BRANCH_NAME, 'development')
+                    env.IMAGE_NAME    = "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${SERVICE_NAME}"
+                    env.CURRENT_STAGE = 'Code Checkout'
+
+                    echo """
+┌─────────────────────────────────────────────────┐
+│              Repository Metadata                │
+├─────────────────────────────────────────────────┤
+│ Service       : ${SERVICE_NAME.padRight(32)} │
+│ Branch        : ${env.GIT_BRANCH_NAME.padRight(32)} │
+│ Environment   : ${env.DEPLOY_ENV.padRight(32)} │
+│ Commit (full) : ${env.GIT_COMMIT_FULL.padRight(32)} │
+│ Commit (short): ${env.GIT_COMMIT_SHORT.padRight(32)} │
+│ Tag           : ${env.GIT_TAG.padRight(32)} │
+│ Author        : ${env.GIT_AUTHOR_NAME.padRight(32)} │
+│ Email         : ${env.GIT_AUTHOR_EMAIL.padRight(32)} │
+│ Message       : ${env.GIT_COMMIT_MSG.take(32).padRight(32)} │
+│ Date          : ${env.GIT_COMMIT_DATE.padRight(32)} │
+│ Total Commits : ${env.GIT_TOTAL_COMMITS.padRight(32)} │
+│ Image Tag     : ${env.IMAGE_TAG.padRight(32)} │
+│ Build No.     : ${env.BUILD_NUMBER.padRight(32)} │
+│ Build URL     : ${env.BUILD_URL.take(32).padRight(32)} │
+└─────────────────────────────────────────────────┘"""
+                }
+            }
+        }
+
+        stage('Build & Unit Test') {
+            steps {
+                script {
+                    env.CURRENT_STAGE = 'Build & Unit Test'
+                    echo "╔══════════════════════════════════╗"
+                    echo "║   STAGE 2 — Build & Unit Test    ║"
+                    echo "╚══════════════════════════════════╝"
+                }
+                sh 'npm ci --prefer-offline'
+                sh 'npm run lint --if-present'
+                sh "${NPM_TEST_CMD}"
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: '**/junit.xml'
+                    publishHTML([
+                        allowMissing         : true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll              : true,
+                        reportDir            : 'coverage/lcov-report',
+                        reportFiles          : 'index.html',
+                        reportName           : 'Unit Test Coverage'
+                    ])
+                }
+            }
+        }
+
+        stage('SAST — SonarQube Analysis') {
+            steps {
+                script {
+                    env.CURRENT_STAGE = 'SAST — SonarQube Analysis'
+                    echo "╔══════════════════════════════════╗"
+                    echo "║   STAGE 3 — SAST / SonarQube     ║"
+                    echo "╚══════════════════════════════════╝"
+                    sh "mkdir -p ${env.SONAR_REPORT_DIR}"
+                }
+
+                withCredentials([string(credentialsId: SONAR_TOKEN_ID, variable: 'SONAR_AUTH_TOKEN')]) {
+                    withSonarQubeEnv(SONAR_SERVER_NAME) {
+                        sh """
+                            npx sonar-scanner \
+                                -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                                -Dsonar.projectName="${SONAR_PROJECT_NAME}" \
+                                -Dsonar.projectVersion=${env.GIT_COMMIT_SHORT} \
+                                -Dsonar.sources=src \
+                                -Dsonar.exclusions=**/node_modules/**,**/coverage/**,**/test/**,**/*.spec.js \
+                                -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
+                                -Dsonar.testExecutionReportPaths=test-report.xml \
+                                -Dsonar.token=\${SONAR_AUTH_TOKEN} \
+                                -Dsonar.login=\${SONAR_AUTH_TOKEN} \
+                                -Dsonar.scm.revision=${env.GIT_COMMIT_FULL}
+                        """
+                    }
+                }
+
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+
+                script {
+                    writeFile file: "${env.SONAR_REPORT_DIR}/sonar-summary.html", text: """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SAST Report — ${SERVICE_NAME} — ${env.GIT_COMMIT_SHORT}</title>
+  <style>
+    body  { font-family: Arial, sans-serif; margin: 40px; color: #333; }
+    h1    { color: #1e88e5; }
+    table { border-collapse: collapse; width: 100%; }
+    th,td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+    th    { background: #1e88e5; color: #fff; }
+    .ok   { color: #2e7d32; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>SAST Report — ${SERVICE_NAME}</h1>
+  <table>
+    <tr><th>Field</th><th>Value</th></tr>
+    <tr><td>Service</td><td>${SERVICE_NAME}</td></tr>
+    <tr><td>Branch</td><td>${env.GIT_BRANCH_NAME}</td></tr>
+    <tr><td>Commit</td><td>${env.GIT_COMMIT_FULL}</td></tr>
+    <tr><td>Build #</td><td>${env.BUILD_NUMBER}</td></tr>
+    <tr><td>Environment</td><td>${env.DEPLOY_ENV}</td></tr>
+    <tr><td>SonarQube Project</td><td><a href="${SONAR_HOST_URL}/dashboard?id=${SONAR_PROJECT_KEY}">${SONAR_PROJECT_KEY}</a></td></tr>
+    <tr><td>Analysis Date</td><td>${new Date()}</td></tr>
+    <tr><td>Quality Gate</td><td class="ok">PASSED &#x2713;</td></tr>
+  </table>
+  <p style="margin-top:20px;font-size:12px;color:#888;">
+    Generated by Jenkins Build #${env.BUILD_NUMBER} &mdash; ${env.BUILD_URL}
+  </p>
+</body>
+</html>"""
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: "${env.SONAR_REPORT_DIR}/**", allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('SCA — OWASP Dependency Check') {
+            steps {
+                script {
+                    env.CURRENT_STAGE = 'SCA — OWASP Dependency Check'
+                    echo "╔══════════════════════════════════════╗"
+                    echo "║   STAGE 4 — OWASP Dependency Check  ║"
+                    echo "╚══════════════════════════════════════╝"
+                    sh "mkdir -p ${env.OWASP_REPORT_DIR}"
+                }
+
+                dependencyCheck(
+                    additionalArguments: "--project '${SERVICE_NAME}' --scan . --exclude '**/node_modules/**' --format HTML --format XML --out ${env.OWASP_REPORT_DIR} --failOnCVSS ${OWASP_FAIL_CVSS} --enableRetired --enableExperimental",
+                    odcInstallation: OWASP_TOOL_NAME
+                )
+
+                dependencyCheckPublisher(
+                    pattern            : "${env.OWASP_REPORT_DIR}/dependency-check-report.xml",
+                    failedTotalCritical: 1,
+                    unstableTotalHigh  : 5
+                )
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: "${env.OWASP_REPORT_DIR}/**", allowEmptyArchive: true
+                    publishHTML([
+                        allowMissing         : true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll              : true,
+                        reportDir            : env.OWASP_REPORT_DIR,
+                        reportFiles          : 'dependency-check-report.html',
+                        reportName           : 'OWASP Dependency Check'
+                    ])
+                }
+            }
+        }
+
+        stage('Artifact — Build & Push Docker Image') {
+            steps {
+                script {
+                    env.CURRENT_STAGE = 'Artifact — Build & Push Docker Image'
+                    echo "╔══════════════════════════════════════════════╗"
+                    echo "║   STAGE 5 — Docker Build & Push to Harbor   ║"
+                    echo "╚══════════════════════════════════════════════╝"
+
+                    def fullImage   = "${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                    def latestImage = "${env.IMAGE_NAME}:latest"
+                    def envImage    = "${env.IMAGE_NAME}:${env.DEPLOY_ENV}"
+
+                    withCredentials([usernamePassword(
+                        credentialsId   : HARBOR_CREDS_ID,
+                        usernameVariable: 'HARBOR_USER',
+                        passwordVariable: 'HARBOR_PASS'
+                    )]) {
+                        sh """
+                            docker build \
+                                --label git.commit=${env.GIT_COMMIT_FULL} \
+                                --label git.branch=${env.GIT_BRANCH_NAME} \
+                                --label build.number=${env.BUILD_NUMBER} \
+                                --label service.name=${SERVICE_NAME} \
+                                --label deploy.env=${env.DEPLOY_ENV} \
+                                -t ${fullImage} \
+                                -t ${latestImage} \
+                                -t ${envImage} \
+                                .
+                        """
+
+                        sh """
+                            echo \$HARBOR_PASS | docker login ${HARBOR_REGISTRY} -u \$HARBOR_USER --password-stdin
+                            docker push ${fullImage}
+                            docker push ${latestImage}
+                            docker push ${envImage}
+                            docker logout ${HARBOR_REGISTRY}
+                        """
+
+                        sh """
+                            docker rmi ${fullImage}   || true
+                            docker rmi ${latestImage} || true
+                            docker rmi ${envImage}    || true
+                        """
+                    }
+
+                    echo "Image pushed: ${fullImage}"
+                }
+            }
+        }
+
+        stage('Approval Gate — Deploy to Kubernetes') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'staging'
+                }
+            }
+            steps {
+                script {
+                    env.CURRENT_STAGE = 'Approval Gate'
+                    echo "╔══════════════════════════════════════════╗"
+                    echo "║   STAGE 6 — 3-Level Approval Gate       ║"
+                    echo "╚══════════════════════════════════════════╝"
+
+                    def approvalBody = """<html>
+<body style="font-family:Arial,sans-serif;color:#333;">
+  <h2 style="color:#1e88e5;">&#x1F680; Deployment Approval Required</h2>
+  <p>A new build is ready for deployment to <strong>${env.DEPLOY_ENV.toUpperCase()}</strong>.</p>
+  <table style="border-collapse:collapse;width:100%;">
+    <tr style="background:#1e88e5;color:#fff;"><th style="padding:8px;">Field</th><th style="padding:8px;">Value</th></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Service</td><td style="padding:8px;border:1px solid #ddd;">${SERVICE_NAME}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Environment</td><td style="padding:8px;border:1px solid #ddd;"><strong>${env.DEPLOY_ENV.toUpperCase()}</strong></td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Branch</td><td style="padding:8px;border:1px solid #ddd;">${env.GIT_BRANCH_NAME}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Commit SHA</td><td style="padding:8px;border:1px solid #ddd;">${env.GIT_COMMIT_FULL}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Author</td><td style="padding:8px;border:1px solid #ddd;">${env.GIT_AUTHOR_NAME} &lt;${env.GIT_AUTHOR_EMAIL}&gt;</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Commit Message</td><td style="padding:8px;border:1px solid #ddd;">${env.GIT_COMMIT_MSG}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Docker Image</td><td style="padding:8px;border:1px solid #ddd;">${env.IMAGE_NAME}:${env.IMAGE_TAG}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Build #</td><td style="padding:8px;border:1px solid #ddd;">${env.BUILD_NUMBER}</td></tr>
+  </table>
+  <p style="margin-top:16px;">
+    <strong>&#x1F4CE; Attached Reports:</strong><br/>
+    &bull; SAST (SonarQube) &mdash; sonar-summary.html<br/>
+    &bull; SCA (OWASP Dependency Check) &mdash; dependency-check-report.html
+  </p>
+  <p>&#x1F449; <a href="${env.BUILD_URL}input">Click here to Approve or Reject</a></p>
+  <p style="font-size:12px;color:#888;">
+    Approval expires in ${APPROVAL_TIMEOUT_MIN} minutes.<br/>
+    Jenkins Build: ${env.BUILD_URL}
+  </p>
+</body>
+</html>"""
+
+                    emailext(
+                        to                : EMAIL_RECIPIENTS,
+                        from              : EMAIL_FROM,
+                        subject           : "[ACTION REQUIRED] Deploy ${SERVICE_NAME} to ${env.DEPLOY_ENV.toUpperCase()} | Build #${env.BUILD_NUMBER} | ${env.GIT_COMMIT_SHORT}",
+                        body              : approvalBody,
+                        mimeType          : 'text/html',
+                        attachmentsPattern: "${env.SONAR_REPORT_DIR}/sonar-summary.html,${env.OWASP_REPORT_DIR}/dependency-check-report.html"
+                    )
+
+                    timeout(time: APPROVAL_TIMEOUT_MIN, unit: 'MINUTES') {
+                        input(
+                            id                : 'approval-tester',
+                            message           : "QA / Tester — Approve deployment of ${SERVICE_NAME} (${env.GIT_COMMIT_SHORT}) to ${env.DEPLOY_ENV.toUpperCase()}?",
+                            ok                : 'Approve — QA Sign-off',
+                            submitter         : APPROVERS,
+                            submitterParameter: 'APPROVED_BY_TESTER'
+                        )
+                    }
+                    echo "QA approval granted by: ${env.APPROVED_BY_TESTER}"
+
+                    timeout(time: APPROVAL_TIMEOUT_MIN, unit: 'MINUTES') {
+                        input(
+                            id                : 'approval-manager',
+                            message           : "Manager — Approve deployment of ${SERVICE_NAME} (${env.GIT_COMMIT_SHORT}) to ${env.DEPLOY_ENV.toUpperCase()}?",
+                            ok                : 'Approve — Manager Sign-off',
+                            submitter         : APPROVERS,
+                            submitterParameter: 'APPROVED_BY_MANAGER'
+                        )
+                    }
+                    echo "Manager approval granted by: ${env.APPROVED_BY_MANAGER}"
+
+                    timeout(time: APPROVAL_TIMEOUT_MIN, unit: 'MINUTES') {
+                        input(
+                            id                : 'approval-devops',
+                            message           : "DevOps — Approve deployment of ${SERVICE_NAME} (${env.GIT_COMMIT_SHORT}) to ${env.DEPLOY_ENV.toUpperCase()}?",
+                            ok                : 'Approve — DevOps Sign-off',
+                            submitter         : APPROVERS,
+                            submitterParameter: 'APPROVED_BY_DEVOPS'
+                        )
+                    }
+                    echo "DevOps approval granted by: ${env.APPROVED_BY_DEVOPS}"
+
+                    echo """
+┌──────────────────────────────────────────┐
+│         All 3 Approvals Received         │
+├──────────────────────────────────────────┤
+│ QA / Tester : ${env.APPROVED_BY_TESTER?.padRight(26)} │
+│ Manager     : ${env.APPROVED_BY_MANAGER?.padRight(26)} │
+│ DevOps Lead : ${env.APPROVED_BY_DEVOPS?.padRight(26)} │
+└──────────────────────────────────────────┘"""
+                }
+            }
+        }
+
+        stage('Deploy — Kubernetes') {
+            steps {
+                script {
+                    env.CURRENT_STAGE = 'Deploy — Kubernetes'
+                    echo "╔══════════════════════════════════════╗"
+                    echo "║   STAGE 7 — Deploy to Kubernetes    ║"
+                    echo "╚══════════════════════════════════════╝"
+                }
+                withCredentials([file(
+                    credentialsId: K8S_KUBECONFIG_ID,
+                    variable     : 'KUBECONFIG_FILE'
+                )]) {
+                    sh """
+                        export KUBECONFIG=\$KUBECONFIG_FILE
+
+                        kubectl get namespace ${K8S_NAMESPACE} || kubectl create namespace ${K8S_NAMESPACE}
+
+                        kubectl set image deployment/${SERVICE_NAME} \
+                            ${K8S_CONTAINER_NAME}=${env.IMAGE_NAME}:${env.IMAGE_TAG} \
+                            --namespace=${K8S_NAMESPACE}
+
+                        kubectl annotate deployment/${SERVICE_NAME} \
+                            kubernetes.io/change-cause="Build #${env.BUILD_NUMBER} | commit: ${env.GIT_COMMIT_SHORT} | branch: ${env.GIT_BRANCH_NAME} | author: ${env.GIT_AUTHOR_NAME}" \
+                            --namespace=${K8S_NAMESPACE} \
+                            --overwrite
+
+                        kubectl rollout status deployment/${SERVICE_NAME} \
+                            --namespace=${K8S_NAMESPACE} \
+                            --timeout=${K8S_ROLLOUT_TIMEOUT}s
+
+                        echo "\\n── Pod Status ─────────────────────────────"
+                        kubectl get pods \
+                            --namespace=${K8S_NAMESPACE} \
+                            -l app=${SERVICE_NAME} \
+                            -o wide
+
+                        echo "\\n── Rollout History ────────────────────────"
+                        kubectl rollout history deployment/${SERVICE_NAME} \
+                            --namespace=${K8S_NAMESPACE}
+                    """
+                }
+            }
+        }
+
+    }
+
+    post {
+
+        success {
+            script {
+                emailext(
+                    to      : EMAIL_RECIPIENTS,
+                    from    : EMAIL_FROM,
+                    subject : "SUCCESS: ${SERVICE_NAME} deployed to ${env.DEPLOY_ENV?.toUpperCase()} | Build #${env.BUILD_NUMBER}",
+                    mimeType: 'text/html',
+                    body    : """<html>
+<body style="font-family:Arial,sans-serif;color:#333;">
+  <h2 style="color:#2e7d32;">&#x2705; Deployment Successful</h2>
+  <table style="border-collapse:collapse;width:100%;">
+    <tr style="background:#2e7d32;color:#fff;"><th style="padding:8px;">Field</th><th style="padding:8px;">Value</th></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Service</td><td style="padding:8px;border:1px solid #ddd;">${SERVICE_NAME}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Environment</td><td style="padding:8px;border:1px solid #ddd;"><strong>${env.DEPLOY_ENV?.toUpperCase()}</strong></td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Branch</td><td style="padding:8px;border:1px solid #ddd;">${env.GIT_BRANCH_NAME}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Commit</td><td style="padding:8px;border:1px solid #ddd;">${env.GIT_COMMIT_FULL}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Image</td><td style="padding:8px;border:1px solid #ddd;">${env.IMAGE_NAME}:${env.IMAGE_TAG}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Namespace</td><td style="padding:8px;border:1px solid #ddd;">${K8S_NAMESPACE}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Build #</td><td style="padding:8px;border:1px solid #ddd;">${env.BUILD_NUMBER}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Duration</td><td style="padding:8px;border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
+  </table>
+  <p style="margin-top:16px;">
+    Rollback: <code>kubectl rollout undo deployment/${SERVICE_NAME} -n ${K8S_NAMESPACE}</code><br/>
+    Pinned image: <code>${env.IMAGE_NAME}:${env.IMAGE_TAG}</code>
+  </p>
+  <p style="font-size:12px;color:#888;"><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+</body>
+</html>"""
+                )
+            }
+        }
+
+        failure {
+            script {
+                emailext(
+                    to      : EMAIL_RECIPIENTS,
+                    from    : EMAIL_FROM,
+                    subject : "FAILURE: ${SERVICE_NAME} | Build #${env.BUILD_NUMBER} | Failed at: ${env.CURRENT_STAGE ?: 'Unknown'}",
+                    mimeType: 'text/html',
+                    body    : """<html>
+<body style="font-family:Arial,sans-serif;color:#333;">
+  <h2 style="color:#c62828;">&#x274C; Pipeline Failed</h2>
+  <table style="border-collapse:collapse;width:100%;">
+    <tr style="background:#c62828;color:#fff;"><th style="padding:8px;">Field</th><th style="padding:8px;">Value</th></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Service</td><td style="padding:8px;border:1px solid #ddd;">${SERVICE_NAME}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Branch</td><td style="padding:8px;border:1px solid #ddd;">${env.GIT_BRANCH_NAME}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Commit</td><td style="padding:8px;border:1px solid #ddd;">${env.GIT_COMMIT_FULL}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Failed Stage</td><td style="padding:8px;border:1px solid #ddd;">${env.CURRENT_STAGE ?: 'Unknown'}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Build #</td><td style="padding:8px;border:1px solid #ddd;">${env.BUILD_NUMBER}</td></tr>
+    <tr><td style="padding:8px;border:1px solid #ddd;">Duration</td><td style="padding:8px;border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
+  </table>
+  <p>&#x1F449; <a href="${env.BUILD_URL}console">View Console Output</a></p>
+  <p style="font-size:12px;color:#888;"><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+</body>
+</html>"""
+                )
+            }
+        }
+
+        unstable {
+            script {
+                emailext(
+                    to                : EMAIL_RECIPIENTS,
+                    from              : EMAIL_FROM,
+                    subject           : "UNSTABLE: ${SERVICE_NAME} | Build #${env.BUILD_NUMBER} | Quality Gate Warnings",
+                    mimeType          : 'text/html',
+                    attachmentsPattern: "${env.SONAR_REPORT_DIR}/sonar-summary.html,${env.OWASP_REPORT_DIR}/dependency-check-report.html",
+                    body              : """<html>
+<body style="font-family:Arial,sans-serif;color:#333;">
+  <h2 style="color:#e65100;">&#x26A0;&#xFE0F; Pipeline Unstable</h2>
+  <p>Quality thresholds were breached. No deployment was triggered.</p>
+  <p>
+    Service: <strong>${SERVICE_NAME}</strong><br/>
+    Branch: ${env.GIT_BRANCH_NAME}<br/>
+    Build #: ${env.BUILD_NUMBER}
+  </p>
+  <p>Please review the attached SAST and SCA reports.</p>
+  <p>&#x1F449; <a href="${env.BUILD_URL}">View Build</a></p>
+</body>
+</html>"""
+                )
+            }
+        }
+
+        aborted {
+            script {
+                emailext(
+                    to      : EMAIL_RECIPIENTS,
+                    from    : EMAIL_FROM,
+                    subject : "ABORTED: ${SERVICE_NAME} | Build #${env.BUILD_NUMBER} | Approval Timeout or Manual Abort",
+                    body    : "Pipeline aborted for ${SERVICE_NAME} build #${env.BUILD_NUMBER}. No deployment was made.\n\nBuild: ${env.BUILD_URL}"
+                )
+            }
+        }
+
+        always {
+            cleanWs()
+        }
+    }
+}
